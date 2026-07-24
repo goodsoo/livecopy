@@ -254,8 +254,23 @@ function onClickCapture(e: MouseEvent) {
   }
 }
 
+// 편집 중엔 URL 에 ?edit 를 유지한다 — 클라이언트 라우팅(탭 이동 등)으로 쿼리가
+// 사라져도 복구해, 새로고침·링크 공유 시에도 편집모드가 일관되게 유지되도록.
+function ensureEditParam() {
+  try {
+    const u = new URL(location.href);
+    if (!u.searchParams.has("edit")) {
+      u.searchParams.set("edit", "1");
+      history.replaceState(history.state, "", u.toString());
+    }
+  } catch {
+    /* ignore */
+  }
+}
+
 function scan(root: ParentNode = document.body) {
   if (!active) return; // 종료된 뒤 예약된 스캔은 무시
+  ensureEditParam(); // 라우팅으로 빠진 ?edit 복구
   const els = root.querySelectorAll<HTMLElement>("*");
   els.forEach((el) => {
     if (el.hasAttribute("data-ce-id")) return;
