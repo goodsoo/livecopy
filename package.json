@@ -1,0 +1,34 @@
+{
+  "name": "livecopy",
+  "version": "0.1.0",
+  "description": "In-place copy review overlay for any web app: edit text on the rendered site, leave positioned memos, export as JSON, apply back to source.",
+  "type": "module",
+  "bin": {
+    "livecopy": "./src/cli.mjs"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/overlay.d.ts",
+      "import": "./dist/overlay.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src/cli.mjs"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "prepare": "npm run build"
+  },
+  "keywords": [
+    "copy",
+    "cms",
+    "review",
+    "contenteditable",
+    "overlay"
+  ],
+  "license": "MIT",
+  "devDependencies": {
+    "typescript": "^5.9.3"
+  }
+}
