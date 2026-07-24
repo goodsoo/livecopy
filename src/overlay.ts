@@ -49,6 +49,8 @@ let downloadPrefix = "livecopy";
 let STORAGE_KEY = "livecopy-copy-edits";
 const store = new Map<string, Change>(); // key = `${page}\n${old}`
 let idSeq = 0;
+let active = false; // 편집 모드 활성 여부 (teardown 후 예약된 스캔이 재-태깅 못 하게)
+let scanTimer: number | undefined;
 
 function storeKey(page: string, old: string): string {
   return `${page}\n${old}`;
@@ -253,6 +255,7 @@ function onClickCapture(e: MouseEvent) {
 }
 
 function scan(root: ParentNode = document.body) {
+  if (!active) return; // 종료된 뒤 예약된 스캔은 무시
   const els = root.querySelectorAll<HTMLElement>("*");
   els.forEach((el) => {
     if (el.hasAttribute("data-ce-id")) return;
@@ -351,7 +354,12 @@ function buildPanel() {
   panel = document.createElement("div");
   panel.id = PANEL_ID;
   panel.innerHTML = `
-    <div style="font-weight:600;font-size:14px;margin-bottom:8px;">✏️ 문구 편집</div>
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;">
+      <span style="font-weight:600;font-size:14px;">✏️ 문구 편집</span>
+      <button data-ce-exit title="편집 모드 끄기" style="
+        border:0;border-radius:6px;cursor:pointer;background:#3f3f46;color:#e4e4e7;
+        font-size:11px;padding:4px 8px;">편집 종료 ✕</button>
+    </div>
     <ul style="margin:0 0 10px;padding-left:16px;font-size:12px;line-height:1.7;color:#d4d4d8;">
       <li>글자·버튼 클릭해 수정 (지우면 삭제)</li>
       <li>추가·요청은 글 위 <b>💬</b> 눌러 메모</li>
@@ -385,6 +393,7 @@ function buildPanel() {
   } as CSSStyleDeclaration);
   document.body.appendChild(panel);
   countEl = panel.querySelector("[data-ce-count]");
+  panel.querySelector("[data-ce-exit]")!.addEventListener("click", teardownCopyEditor);
   panel.querySelector("[data-ce-dl]")!.addEventListener("click", download);
   panel.querySelector("[data-ce-reset]")!.addEventListener("click", () => {
     if (!window.confirm("저장된 모든 수정·메모를 지울까요? 되돌릴 수 없습니다.")) return;
@@ -631,13 +640,63 @@ function buildMemoUI() {
 
   document.addEventListener("mouseover", onMemoMouseOver, true);
   document.addEventListener("mouseout", onMemoMouseOut, true);
-  document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && memoBackdrop?.style.display === "block") closeMemo();
+  document.addEventListener("keydown", onEscKeydown);
+}
+
+function onEscKeydown(e: KeyboardEvent) {
+  if (e.key === "Escape" && memoBackdrop?.style.display === "block") closeMemo();
+}
+
+// 편집 모드 완전 종료 — 리로드/URL 조작에 의존하지 않고 그 자리서 해제한다.
+let observerRef: MutationObserver | null = null;
+function teardownCopyEditor() {
+  active = false;
+  window.clearTimeout(scanTimer); // 대기 중인 debounce 스캔 취소
+  observerRef?.disconnect();
+  observerRef = null;
+  document.removeEventListener("input", onInput, true);
+  document.removeEventListener("paste", onPaste, true);
+  document.removeEventListener("click", onClickCapture, true);
+  document.removeEventListener("mouseover", onMemoMouseOver, true);
+  document.removeEventListener("mouseout", onMemoMouseOut, true);
+  document.removeEventListener("keydown", onEscKeydown);
+
+  // 편집 대상 원문 복원 + 태그 해제 (수정·메모는 localStorage 에 보존됨 → 재진입 시 복원)
+  document.querySelectorAll<HTMLElement>("[data-ce-id]").forEach((el) => {
+    const orig = el.getAttribute("data-ce-orig");
+    if (orig != null) el.innerText = orig;
+    el.removeAttribute("data-ce-id");
+    el.removeAttribute("data-ce-orig");
+    el.removeAttribute("data-ce-heading");
+    el.contentEditable = "inherit";
+    el.classList.remove("ce-editable", "ce-interactive", "ce-changed", "ce-emptied", "ce-has-memo");
   });
+
+  panel?.remove();
+  memoBar?.remove();
+  memoPop?.remove();
+  memoBackdrop?.remove();
+  document.getElementById("ce-styles")?.remove();
+  document.body.style.overflow = prevBodyOverflow;
+  panel = memoBar = memoPop = memoBackdrop = null;
+  countEl = null;
+  memoBtn = undoBtn = null;
+
+  // URL 에서 edit 제거 (리로드 없이) → 이후 새로고침해도 편집모드로 재진입하지 않음
+  try {
+    const u = new URL(location.href);
+    u.searchParams.delete("edit");
+    history.replaceState(null, "", u.toString());
+  } catch {
+    /* ignore */
+  }
+  // eslint-disable-next-line no-console
+  console.info("[copy-editor] 편집 모드 종료");
 }
 
 function injectStyles() {
   const style = document.createElement("style");
+  style.id = "ce-styles";
   style.textContent = `
     .ce-editable:hover { outline: 1px dashed rgba(59,130,246,.7); outline-offset: 2px; cursor: text; }
     .ce-editable.ce-interactive:hover { outline-color: rgba(168,85,247,.8); } /* 본문 버튼·링크는 보라 힌트 */
@@ -670,6 +729,7 @@ export function initCopyEditor(config: CopyEditorConfig = {}) {
     STORAGE_KEY = `${config.storagePrefix}-copy-edits`;
     MEMO_KEY = `${config.storagePrefix}-copy-memos`;
   }
+  active = true;
   loadStore(); // 이전 세션 수정 복원
   loadMemos(); // 이전 세션 메모 복원
   injectStyles();
@@ -684,16 +744,15 @@ export function initCopyEditor(config: CopyEditorConfig = {}) {
   setTimeout(() => scan(), 800);
 
   // 라우트 이동·지연 렌더로 새 콘텐츠가 붙으면 다시 스캔 (자기 변경으로 인한 루프는 debounce+disconnect 로 방지)
-  let timer: number | undefined;
-  const observer = new MutationObserver(() => {
-    window.clearTimeout(timer);
-    timer = window.setTimeout(() => {
-      observer.disconnect();
+  observerRef = new MutationObserver(() => {
+    window.clearTimeout(scanTimer);
+    scanTimer = window.setTimeout(() => {
+      observerRef?.disconnect();
       scan();
-      observer.observe(document.body, { childList: true, subtree: true });
+      observerRef?.observe(document.body, { childList: true, subtree: true });
     }, 400);
   });
-  observer.observe(document.body, { childList: true, subtree: true });
+  observerRef.observe(document.body, { childList: true, subtree: true });
 
   // eslint-disable-next-line no-console
   console.info("[copy-editor] 문구 편집 모드 활성화됨");
