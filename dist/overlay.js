@@ -37,8 +37,9 @@ const store = new Map(); // key = `${page}\n${old}`
 let idSeq = 0;
 let active = false; // 편집 모드 활성 여부 (teardown 후 예약된 스캔이 재-태깅 못 하게)
 let scanTimer;
-function storeKey(page, old) {
-    return `${page}\n${old}`;
+// 키에 dup(등장 순번)을 포함 → 원래글자가 같은 요소 여럿이 서로 안 겹치고 각각 저장된다.
+function storeKey(page, old, dup = 0) {
+    return `${page}\n${old}\n#${dup}`;
 }
 function loadStore() {
     try {
@@ -46,7 +47,7 @@ function loadStore() {
         if (!raw)
             return;
         for (const c of JSON.parse(raw))
-            store.set(storeKey(c.page, c.old), c);
+            store.set(storeKey(c.page, c.old, c.dup ?? 0), c);
     }
     catch {
         /* 손상된 저장값은 무시 */
@@ -207,8 +208,12 @@ function isInteractive(el) {
 function tag(el) {
     const id = `ce-${idSeq++}`;
     const orig = (el.innerText || "").trim();
+    // 이미 태깅된 요소 중 원래글자가 같은 것의 수 = 이 요소의 등장 순번(문서 순서라 재로드에도 안정).
+    // 같은 글자("(내용)" 같은 placeholder)가 여럿이어도 각각 다른 키로 저장되게 한다.
+    const dup = Array.from(document.querySelectorAll("[data-ce-orig]")).filter((o) => o.getAttribute("data-ce-orig") === orig).length;
     el.setAttribute("data-ce-id", id);
     el.setAttribute("data-ce-orig", orig);
+    el.setAttribute("data-ce-dup", String(dup));
     el.setAttribute("data-ce-heading", nearestHeading(el));
     el.contentEditable = "true";
     el.spellcheck = false;
@@ -216,7 +221,7 @@ function tag(el) {
     if (isInteractive(el))
         el.classList.add("ce-interactive");
     // 이전에 저장된 수정이 있으면 화면에 다시 반영 (새로고침·재방문 복원)
-    const saved = store.get(storeKey(location.pathname, orig));
+    const saved = store.get(storeKey(location.pathname, orig, dup));
     if (saved && saved.new !== orig) {
         el.innerText = saved.new;
         el.classList.add("ce-changed");
@@ -279,6 +284,7 @@ function untagHeader() {
             return;
         el.removeAttribute("data-ce-id");
         el.removeAttribute("data-ce-orig");
+        el.removeAttribute("data-ce-dup");
         el.removeAttribute("data-ce-heading");
         el.contentEditable = "inherit";
         el.classList.remove("ce-editable", "ce-interactive", "ce-changed");
@@ -289,8 +295,9 @@ function onInput(e) {
     if (!el)
         return;
     const orig = el.getAttribute("data-ce-orig") || "";
+    const dup = Number(el.getAttribute("data-ce-dup") || 0);
     const current = (el.innerText || "").trim();
-    const key = storeKey(location.pathname, orig);
+    const key = storeKey(location.pathname, orig, dup);
     if (current === orig) {
         // 원문과 같아지면 변경 취소. 빈 문자열(완전 삭제)은 정당한 변경이므로 else 로 저장됨.
         store.delete(key);
@@ -304,6 +311,7 @@ function onInput(e) {
             nearHeading: el.getAttribute("data-ce-heading") || "",
             tag: el.tagName,
             ts: Date.now(),
+            dup,
         });
         el.classList.add("ce-changed");
         el.classList.toggle("ce-emptied", current === ""); // 완전 삭제 시 클릭 가능한 크기 유지
@@ -674,6 +682,7 @@ function teardownCopyEditor() {
             el.innerText = orig;
         el.removeAttribute("data-ce-id");
         el.removeAttribute("data-ce-orig");
+        el.removeAttribute("data-ce-dup");
         el.removeAttribute("data-ce-heading");
         el.contentEditable = "inherit";
         el.classList.remove("ce-editable", "ce-interactive", "ce-changed", "ce-emptied", "ce-has-memo");
