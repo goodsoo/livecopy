@@ -326,7 +326,14 @@ function buildJson() {
     const memoList = Array.from(memos.values())
         .sort((a, b) => a.page.localeCompare(b.page) || b.ts - a.ts)
         .map(({ anchorText, note, page, nearHeading, tag }) => ({ anchorText, note, page, nearHeading, tag }));
-    return JSON.stringify({ edits, memos: memoList }, null, 2);
+    // 파일이 스스로 설명하도록 메타 포함 → 이 파일만 받아도 무엇인지·어떻게 반영하는지 바로 안다.
+    return JSON.stringify({
+        _tool: "livecopy",
+        _howto: "웹사이트 카피(문구) 검수 변경분입니다. 반영 방법: 해당 프로젝트 repo 에서 `npx livecopy apply <이 JSON 파일>` 실행 → edits 는 옛 문구를 새 문구로 자동 치환하고, git diff 로 검토 후 커밋하세요. memos 는 자동 반영하지 말고 개발자가 처리할 요청 목록입니다(위치 후보 파일이 함께 출력됨). livecopy 가 설치돼 있지 않으면 edits 의 old→new 를 소스에서 찾아 치환하면 됩니다.",
+        _docs: "https://github.com/goodsoo/livecopy",
+        edits,
+        memos: memoList,
+    }, null, 2);
 }
 function download() {
     const json = buildJson();
